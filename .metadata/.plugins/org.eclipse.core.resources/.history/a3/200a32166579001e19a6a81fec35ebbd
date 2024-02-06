@@ -1,0 +1,355 @@
+/******************************************************************************
+ *  Module:    USER
+ *  File name: user.c
+ *  Created on: Oct 26, 2023
+ *  Author: Mohamed Khaled
+ *******************************************************************************/
+
+#include "user.h"
+#include "std_types.h"
+#include "keypad.h"
+#include "lcd.h"
+#include "uart.h"
+#include "timer1.h"
+#include <util\delay.h>
+
+static volatile uint16  g_tick=0;
+
+
+void insertPassword(void)
+{
+	/*Clear screen from previous operation*/
+	LCD_clearScreen();
+
+	/* Actual operation */
+	LCD_displayStringRowColumn(0,0,"Plz enter pass: ");
+	LCD_moveCursor(1,0);
+
+	/* password must be 5 digits*/
+	uint8 password_digit_counter=0;
+
+	/*Variable to hold keypad press*/
+	uint8 key1;
+
+	/* Agreement between the two MCS to start send password */
+	UART_sendByte(MC1_WILL_SEND_PASSWORD);
+
+
+	/* take 5-Digits from USER */
+	while(password_digit_counter<PASSWORD_DIGITS_NUMBER){
+
+		/* get key pressed by USER   */
+		key1=KEYPAD_getPressedKey();
+
+		/* take only numbers and ignore (+,-,%,*)  */
+		if(key1>=0 && key1<=9){
+
+			/* send the number to MC2 */
+			UART_sendByte(key1);
+
+			LCD_intgerToString(key1);
+
+			/* debounce time */
+			_delay_ms(300);
+
+			LCD_sendCommand(0x10);
+
+			/* display * on the LCD represent entering number */
+			LCD_displayCharacter('*');
+
+			/* increment counter */
+			password_digit_counter++;
+		}
+	}
+
+}
+
+
+void reInsertPassword(void)
+{
+	/*Clear screen from previous operation*/
+	LCD_clearScreen();
+
+	/* Actual operation */
+	LCD_displayStringRowColumn(0,0,"Plz re-enter the");
+	LCD_displayStringRowColumn(1,0,"same pass:");
+	LCD_moveCursor(1,11);
+
+	/* counter for password Digits */
+	uint8 password_digit_counter=0;
+
+	/* Agreement between the two MCS to start send confirm password */
+	UART_sendByte(MC1_WILL_SEND_CONFIRM_PASSWORD);
+
+	/*Variable to hold keypad press*/
+	uint8 key;
+
+	/* take 5-Digits from USER */
+	while(password_digit_counter<PASSWORD_DIGITS_NUMBER)
+	{
+		/* get key pressed by USER   */
+		key=KEYPAD_getPressedKey();
+
+		/* take only numbers and ignore (+,-,%,*)  */
+		if(key>=0 && key<=9){
+
+			/* send the number to MC2 */
+			UART_sendByte(key);
+
+			LCD_intgerToString(key);
+
+			/* debounce time */
+			_delay_ms(300);
+
+			LCD_sendCommand(0x10);
+
+			/* display * on the LCD represent entering number */
+			LCD_displayCharacter('*');
+
+
+			/* increament counter */
+			password_digit_counter++;
+		}
+	}
+
+}
+
+
+void recievePasswordChecked(void)
+{
+	/* variable to hold state of the two passwords */
+	/* we initialized it with any value except 0,1  */
+	uint8 password_equal_flag=2;
+
+
+
+
+	while(UART_receiveByte() != MC2_WILL_SEND_CHECK);
+
+	/*receive state of the two passwords from MC2  */
+	password_equal_flag=UART_receiveByte();
+
+	/* value 0 : the two passwords are not identical and the user will enter the password and confirm password again */
+	/* value 1 : the two passwords are identical and the user will continue to the next operation */
+	switch(password_equal_flag)
+	{
+	case 0:
+		LCD_clearScreen();
+		LCD_displayStringRowColumn(0,0,"not sameeeeeeeeeeeee");
+		delayInSeconds(1);
+
+		insertPassword();
+		reInsertPassword();
+		recievePasswordChecked();
+		break;
+
+	case 1:
+		LCD_clearScreen();
+		LCD_displayStringRowColumn(0,0,"sameeeeeeeeeeeee");
+		delayInSeconds(1);
+		second_menu();
+		break;
+
+	}
+
+}
+
+
+
+
+void second_menu(void){
+
+	/* variable to hold key pressed from USER */
+	uint8 key;
+
+	/*Clear screen from previous operation*/
+	LCD_clearScreen();
+
+	/*Variable to check Driving Motor*/
+	uint8 match_password_in_eeprom = 2;
+
+	/*Variable to hold number of miss matches*/
+	static uint8 missmatch_counter = 0;
+
+
+	/* Actual operation */
+	LCD_displayStringRowColumn(0,0,"+ : Open Door");
+	LCD_displayStringRowColumn(1,0,"- : Change Pass");
+
+	/* get key pressed by USER   */
+	key=KEYPAD_getPressedKey();
+
+	_delay_ms(800);
+	insertPassword();
+	match_password_in_eeprom=UART_receiveByte();
+
+	UART_sendByte(MC1_WILL_SEND_USER_CHOICE);
+
+	/* send choice to MC2 */
+	UART_sendByte(key);
+
+while(match_password_in_eeprom==0)
+{
+	missmatch_counter++;
+
+	 if(missmatch_counter == PASSWORD_MISMATCH_MAXIMUM)
+			 {
+				 LCD_clearScreen();
+				 LCD_displayString("Error");
+				 missmatch_counter = 0;
+				 break;
+			 }
+	 insertPassword();
+	 match_password_in_eeprom= UART_receiveByte();
+
+}
+
+
+if(match_password_in_eeprom==1)
+{
+	switch(key)
+	{
+	case '+' :openDoor();
+	break;
+	case '-' :
+		break;
+		changePassword();
+	}
+}
+
+
+
+
+	/*IF matched with password saved in EEPROM - Drive Motor*/
+
+
+	/* choice + mean that the  */
+/*	switch(key)
+	{
+	case '+' :
+
+
+		/*Enter Password*/
+		/*insertPassword();*/
+
+/*
+		while(UART_receiveByte()!=MC2_WILL_SEND_MATCH_PASSWORD_IN_EEPROM);
+		match_password_in_eeprom=UART_receiveByte();
+		switch(match_password_in_eeprom)
+		{
+		case 0:
+			missmatch_counter++;
+			if(missmatch_counter == PASSWORD_MISMATCH_MAXIMUM )
+			{
+				LCD_clearScreen();
+				LCD_displayString("Error^^^^");
+				delayInSeconds(60);
+
+				missmatch_counter = 0;
+				break;
+			}
+
+			LCD_displayString("NOT TRUE");
+			LCD_moveCursor(1,0);
+			LCD_intgerToString(missmatch_counter);
+
+			insertPassword();
+			break;
+		case 1:
+			openDoor();
+			break;
+		}
+
+		break;
+
+		case '-' :
+			/*insertPassword();*/
+/*
+			match_password_in_eeprom=UART_receiveByte();
+			switch(match_password_in_eeprom)
+			{
+			case 0:
+				missmatch_counter++;
+				if(missmatch_counter == PASSWORD_MISMATCH_MAXIMUM )
+				{
+					LCD_clearScreen();
+					LCD_displayString("Error^^^^");
+					delayInSeconds(60);
+
+					missmatch_counter = 0;
+					break;
+				}
+				LCD_displayString("NOT TRUE");
+				LCD_moveCursor(1,0);
+				LCD_intgerToString(missmatch_counter);
+
+				break;
+
+			case 1:
+				LCD_clearScreen();
+				LCD_displayString("CORRECT PASS");
+				delayInSeconds(1);
+				changePassword();
+				break;
+			}
+
+
+	} */
+
+}
+
+
+void openDoor(void){
+
+	/* clear screen from previous operation */
+	LCD_clearScreen();
+	/* display (Door is Unlocking) for 15 seconds */
+	LCD_displayStringRowColumn(0,4,"Door is");
+	LCD_displayStringRowColumn(1,4,"Unlocking  ");
+	delayInSeconds(15);
+
+	/* clear screen from previous operation */
+	LCD_clearScreen();
+
+	/* display (Waiting) for 3 seconds */
+	LCD_displayStringRowColumn(0,4,"Waiting ");
+	delayInSeconds(3);
+
+	/* clear screen from previous operation */
+	LCD_clearScreen();
+
+	/* display (Door is Locking) for 15 seconds */
+	LCD_displayString("Door is Locking");
+	delayInSeconds(15);
+}
+
+
+void changePassword()
+{
+	insertPassword();
+	reInsertPassword();
+	recievePasswordChecked();
+
+}
+
+
+
+
+void tickIncreament(void)
+{
+	g_tick++;
+}
+
+void delayInSeconds(uint8 number_seconds)
+{
+	g_tick=0;
+
+	Timer1_ConfigType timer1={0,1563,CPU_1024,CTC};
+	Timer1_init(&timer1);
+
+	Timer1_setCallBack(tickIncreament);
+	while(g_tick<5*number_seconds);
+	Timer1_deInit();
+}
+
+

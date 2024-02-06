@@ -1,0 +1,255 @@
+#include "system.h"
+#include "std_types.h"
+#include "dcmotor.h"
+#include "external_eeprom.h"
+#include "uart.h"
+#include "timer1.h"
+#include "buzzer.h"
+#include <util\delay.h>
+
+uint8 password[5],confirm_password[5];
+
+static volatile uint8 g_tick=0;
+
+void first_menu_response(void)
+{
+	recievePasswordFromUser();
+	recieveConfirmPasswordFromUser();
+	checkPasswordMatch();
+}
+
+
+
+void recievePasswordFromUser(void){
+	/* counter for password Digits */
+	uint8 i=0;
+
+	/* MC2 won't start receiving password until MC1 sends this starting bit  */
+	while(UART_receiveByte()!=MC1_WILL_SEND_PASSWORD);
+
+	/* for loop to receive the password bit by bit and store it in a global array */
+	for(i=0;i<PASSWORD_DIGITS_NUMBER;i++){
+		password[i]=UART_receiveByte();
+	}
+}
+
+void recieveConfirmPasswordFromUser(void){
+	/* counter for confirm password Digits */
+	uint8 i=0;
+	/* MC2 won't start receiving confirm password until MC1 sends this starting bit  */
+	while(UART_receiveByte()!=MC1_WILL_SEND_COFIRM_PASSWORD);
+
+	for(i=0;i<PASSWORD_DIGITS_NUMBER;i++){
+		confirm_password[i]=UART_receiveByte();
+	}
+}
+
+
+void checkPasswordMatch(void){
+	uint8 i=0;
+	uint8 flag=1;
+
+	for(i=0;i<PASSWORD_DIGITS_NUMBER;i++)
+	{
+		//g_password[i]=arr1[i]; /* store password while the first password entry is the same of the second password entry */
+		if(password[i]!=confirm_password[i])
+		{
+
+			flag=0;
+			/* break the loop if a digit is not identical in password and confirm password  */
+			break;
+
+		}
+
+	}
+	UART_sendByte(MC2_WILL_SEND_CHECK);
+
+			UART_sendByte(flag);
+
+	switch(flag)
+	{
+	case 0 :
+		recievePasswordFromUser();
+		recieveConfirmPasswordFromUser();
+		checkPasswordMatch();
+
+
+
+	break;
+
+	case 1 :
+
+		storeInEEPROM();
+		second_menu_response();
+		break;
+
+	}
+}
+
+
+void storeInEEPROM(void)
+{
+	uint8 i;
+	/* Write pass in EEPROM*/
+	for(i=0 ;i<PASSWORD_DIGITS_NUMBER ;i++)
+	{
+		EEPROM_writeByte(((0x0311)+i) ,password[i]);
+		_delay_ms(50);
+	}
+
+}
+
+uint8 checkPasswordInEEPROM(void)
+{
+	uint8 i,read_data;
+	uint8 flag = 1 ;
+	/* Write pass in EEPROM*/
+	for(i=0 ;i<PASSWORD_DIGITS_NUMBER ;i++)
+	{
+		EEPROM_readByte(((0x0311)+i) ,&read_data);
+		if(read_data!=password[i]){
+			flag=0;
+			break;
+		}
+
+	}
+
+	return flag;
+}
+
+
+void motorOperation(void)
+{
+	DCMOTOR_rotate(CLOCK_WISE,100); //15 seconds
+	delayInSeconds(15);
+	DCMOTOR_rotate(STOP,0);
+	delayInSeconds(3);
+	DCMOTOR_rotate(ANTI_CLOCK_WISE,100); //15 seconds
+	delayInSeconds(15);
+	DCMOTOR_rotate(STOP,0);
+
+
+}
+
+
+void second_menu_response(void){
+	/* variable to hold user choice */
+	uint8 get_user_choice=2;
+	uint8 password_check_flag=2;
+	uint8 password_state=FALSE;
+	static uint8 missmatch_counter=0;
+
+	recievePasswordFromUser();
+			password_check_flag=checkPasswordInEEPROM();
+			UART_sendByte(password_check_flag);
+
+while(UART_receiveByte()!=MC1_WILL_SEND_USER_CHOICE);
+	/* receive the choice from MC1 */
+	get_user_choice=UART_receiveByte();
+	switch(get_user_choice){
+
+	/* if user choose '+' */
+	/* user must insert the password and MC2 will receive it */
+	/* then MC2 check password with password in EEPROM */
+	case '+' :
+
+
+		while ( password_check_flag == 0)
+			{
+				missmatch_counter++;
+
+				/*if Mismatches are 3 , Buzzer ON*/
+				if(missmatch_counter == PASSWORD_MISMATCH_MAXIMUM)
+				{
+					BUZZER_active();
+					missmatch_counter = 0;
+					break;
+				}
+
+		//recievePasswordFromUser();
+	//	password_check_flag=checkPasswordInEEPROM();
+
+	//	UART_sendByte(MC2_WILL_SEND_MATCH_PASSWORD_IN_EEPROM);
+	//	UART_sendByte(password_check_flag);
+
+	/*	if(password_check_flag==1)
+		{
+			motorOperation();
+			password_check_flag=2;
+		}
+		break;*/
+
+		/* if user choose '-' */
+		/* user must insert the current password and MC2 will receive it */
+		/* then MC2 check password with password in EEPROM */
+		/* if passwords identical the MC2 will receive new password and confirm this password */
+		/* then store the password in EEPROM*/
+	case '-' :
+	//	recievePasswordFromUser();
+		//password_check_flag=checkPasswordInEEPROM();
+UART_sendByte(password_check_flag);
+
+		switch(password_check_flag)
+		{
+		case TRUE :
+			recievePasswordFromUser();
+			recieveConfirmPasswordFromUser();
+			checkPasswordMatch();
+
+			break;
+
+		case FALSE :
+			recievePasswordFromUser();
+			password_state= checkPasswordInEEPROM();
+			if(password_state==TRUE)
+			{
+				second_menu_response();
+			}
+			else{
+				recievePasswordFromUser();
+				password_state= checkPasswordInEEPROM();
+				if(password_state==TRUE)
+				{
+					second_menu_response();
+				}
+
+			}
+
+break;
+
+		}
+		break;
+	}
+}
+
+
+void tickIncreament(void)
+{
+	g_tick++;
+}
+
+void delayInSeconds(uint8 number_seconds)
+{
+	g_tick=0;
+
+	Timer1_ConfigType timer1={0,1563,F_CPU_1024,CTC};
+	Timer1_init(&timer1);
+
+	Timer1_setCallBack(tickIncreament);
+	while(g_tick<5*number_seconds);
+	Timer1_deInit();
+
+}
+
+/* function to active BUZZER for a period of time */
+void BUZZER_active(void)
+{
+
+	BUZZER_init();
+	BUZZER_ON();
+	delayInSeconds(60);
+	BUZZER_OFF();
+}
+
+
+
